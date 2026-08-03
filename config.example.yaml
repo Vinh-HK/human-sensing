@@ -1,0 +1,138 @@
+# Configuration wifisense — copie ce fichier en config.yaml et adapte-le.
+
+log_level: INFO
+
+source:
+  # fake     : simulateur, aucun matériel (pour démarrer et tester)
+  # limesdr  : LimeSDR via SoapySDR
+  # esp32csi : nœuds ESP32-S3 envoyant du CSI en UDP
+  type: fake
+
+  slow_rate_hz: 100.0     # rythme de la série analysée (20 Hz pour l'ESP32)
+  block_s: 0.5            # période de décision
+
+  # --- LimeSDR -------------------------------------------------------------
+  # ATTENTION : le LimeSDR-USB plafonne à 3,8 GHz. Le Wi-Fi 5 GHz est HORS DE
+  # PORTÉE — il faut un SSID 2,4 GHz actif dans le logement.
+  # Nombres écrits en entier volontairement : PyYAML suit YAML 1.1, où « 2.4e9 »
+  # est lu comme une CHAÎNE (il faudrait « 2.4e+9 »). Écrire les Hz en clair
+  # évite ce piège.
+  frequency_hz: 2437000000   # canal 6 ; canal 1 = 2412000000, canal 11 = 2462000000
+  sample_rate_hz: 2000000
+  bandwidth_hz: 3000000
+  gain_db: 40             # 0–73 ; monte si duty faible, baisse si ça sature
+  antenna: LNAH           # voie haute fréquence, obligatoire à 2,4 GHz
+  fine_decim: 50          # sample_rate/fine_decim/slow_rate doit être ENTIER
+  gate_db: 6.0            # marge au-dessus du plancher de bruit = « un paquet »
+
+  # --- ESP32 CSI -----------------------------------------------------------
+  udp_port: 5566
+  subcarrier_refresh_s: 20.0
+
+  # --- simulateur ----------------------------------------------------------
+  # Le simulateur réutilise sample_rate_hz ci-dessus ; 200e3 suffit largement et
+  # tourne beaucoup plus vite que 2e6. Un scénario par voie est possible :
+  #   fake_scenario: {0: shower, 1: breathing, 2: machine_human}
+  fake_scenario: empty    # empty|shower|breathing|walking|machine|machine_human
+
+# Le Wi-Fi n'émet que s'il a du trafic à écouler ; sans trafic, aucune mesure.
+# La cible DOIT être un appareil connecté en Wi-Fi (téléphone, prise connectée),
+# pas le routeur vu depuis un serveur câblé — sinon rien ne traverse l'air.
+traffic:
+  enabled: false
+  target: "192.168.1.42"
+  port: 9
+  rate_hz: 100
+  payload_bytes: 200
+
+mqtt:
+  host: 127.0.0.1
+  port: 1883
+  username: ""
+  password: ""
+  base_topic: zigbee2mqtt
+  refresh_s: 300          # réémission périodique (la maille Zigbee perd des trames)
+  override_s: 900         # si tu touches l'interrupteur, l'auto se tait 15 min
+  # Optionnel : ne rien allumer en plein jour.
+  # lux_topic: "zigbee2mqtt/capteur_lumiere"
+  # lux_threshold: 40
+
+presence:
+  on_confirm: 2           # blocs consécutifs requis pour allumer
+  hold_s: 120             # temporisation avant extinction
+
+# Classification par pièce : un classifieur binaire par pièce, alimenté par les
+# caractéristiques de TOUS les nœuds. C'est ce qui permet (a) de rejeter les
+# fuites entre pièces voisines et (b) de gérer plusieurs occupants à la fois —
+# un classifieur à étiquette unique supposerait une seule personne.
+classifier:
+  window_s: 8.0
+  n_bands: 6
+  model_path: classifier.npz
+  dataset_path: calibration_data.npz
+
+# Surveillance de la péremption du modèle. Deux dérives distinctes :
+#   - périodes VIDES    -> nœud mort, gain, trafic effondré, nouveau brouilleur
+#   - périodes ACTIVES  -> meubles déplacés (les périodes vides ne le voient pas :
+#                          sans mouvement, le score reste à 0 avant comme après)
+drift:
+  enabled: true
+  report_every_s: 3600
+  warn_db: 2.5                    # dérive de référence à vide
+  recalibrate_db: 5.0
+  novelty_warn_ratio: 1.4         # écart aux situations calibrées
+  novelty_recalibrate_ratio: 2.0
+  status_topic: wifisense/drift
+  # Collecte auto d'échantillons « vide » pendant les périodes calmes. Coupée
+  # par défaut : une personne endormie serait apprise comme du vide.
+  auto_collect: false
+
+# Journal des bascules avec le score qui les a provoquées. Indispensable pour
+# comprendre a posteriori pourquoi une lampe s'est allumée.
+decision_log: decisions.jsonl
+
+# IMPORTANT — une voie = un point de mesure = une pièce.
+#   LimeSDR Mini   : UNE seule voie RX (channel 0). Une zone, point.
+#   LimeSDR-USB    : deux voies RX (channel 0 et 1).
+#   nœuds ESP32    : une voie par nœud, channel = node_id.
+# Et le 2,4 GHz traverse les cloisons légères : deux antennes dans le même
+# logement se voient mutuellement. Multiplier les voies ne suffit pas, c'est la
+# géométrie (nœud et box de part et d'autre de la zone) qui fait la séparation.
+#
+# 'detector: classifier' = mode multi-nœuds (recommandé dès 2 nœuds).
+# Les détecteurs scalaires (shower/breathing/kitchen) restent disponibles pour
+# un nœud isolé, ou pour comparer.
+zones:
+  douche:
+    detector: classifier
+    channel: 0            # node_id de l'ESP32 (ou voie RX du SDR)
+    lights: [ampoule_salle_de_bain]
+    threshold_db: 4.0
+    hold_s: 90
+
+  chambre:
+    detector: classifier
+    channel: 1
+    lights: [ampoule_chambre]
+    threshold_db: 4.0
+    hold_s: 300
+    brightness: 120
+
+  cuisine:
+    detector: classifier
+    channel: 2
+    lights: [ampoule_cuisine]
+    threshold_db: 4.0
+    hold_s: 120
+
+  salon:
+    detector: classifier
+    channel: 3
+    lights: [ampoule_salon, lampadaire_canape]
+    threshold_db: 4.0
+    hold_s: 300           # long : c'est tout l'intérêt du système
+    brightness: 180
+
+# Le couloir n'est PAS ici : un lieu de passage se traite bien mieux avec un
+# détecteur de mouvement PIR Zigbee à ~10 €, qui rejoindra le même Zigbee2MQTT.
+# L'immobilité, seul problème que ce système résout mieux, n'y arrive jamais.
