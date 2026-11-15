@@ -12,8 +12,8 @@ l'appartement, et Zigbee2MQTT pour les lampes.
 Schéma animé du fonctionnement : [`docs/fonctionnement.html`](docs/fonctionnement.html)
 (à ouvrir dans un navigateur).
 
-> L'ancienne version de ce dépôt (détection par Wi-Fi CSI) est conservée sous le
-> tag [`wifi-csi-archive`](../../tree/wifi-csi-archive).
+> L'ancienne version de ce dépôt (détection par Wi-Fi CSI) est conservée sur la
+> branche [`wifi-csi-archive`](../../tree/wifi-csi-archive).
 
 ---
 
