@@ -1,18 +1,6 @@
-# Environnement
-venv/
 __pycache__/
-*.py[cod]
-.python-version
-
-# Configuration et données locales (personnelles : ne jamais publier)
-config.yaml
-calibration.yaml
-calibration_data.npz
-classifier.npz
-decisions.jsonl
-*.npz
-!tests/fixtures/*.npz
-
-# Enregistrements
-recordings/
-*.iq
+*.pyc
+.pytest_cache/
+firmware/.pio/
+firmware/include/config.h
+hub/config.yaml

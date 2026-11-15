@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>radar-presence — fonctionnement</title>
+<style>
+  :root {
+    --bg: #fbfaf7; --fg: #1d1d1b; --muted: #77746c; --line: #cfcac0;
+    --room: #ffffff; --accent: #2a6fdb; --light: #f5c542; --door: #e08a2c;
+    --held: #8a5cd6; --ok: #2e9d5b; --card: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161614; --fg: #ecebe6; --muted: #9b978d; --line: #46443f;
+      --room: #1f1f1c; --accent: #6aa2ff; --light: #e8b830; --door: #e8a050;
+      --held: #b08cff; --ok: #4fc483; --card: #1f1f1c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 28px 18px 60px; }
+  h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 18px; margin: 44px 0 6px; }
+  p.lead { color: var(--muted); margin: 0 0 22px; max-width: 70ch; }
+  p { max-width: 72ch; }
+  figure { margin: 14px 0 0; }
+  figcaption { color: var(--muted); font-size: 13px; margin-top: 8px; max-width: 80ch; }
+  svg { max-width: 100%; height: auto; display: block; }
+  .demo { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+  @media (max-width: 760px) { .demo { grid-template-columns: 1fr; } }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .panel h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 14px; }
+  .kv b { font-weight: 600; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12.5px; font-weight: 600; color: #fff; }
+  #log { list-style: none; margin: 0; padding: 0; font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; min-height: 9.6em; }
+  #log li { border-bottom: 1px dashed var(--line); padding: 2px 0; }
+  #log li:last-child { border-bottom: 0; }
+  .controls { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  button { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 7px; border: 1px solid var(--line);
+    background: var(--card); color: var(--fg); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; background: var(--c); }
+  .rule { border-left: 3px solid var(--accent); padding: 4px 0 4px 12px; margin: 16px 0; max-width: 72ch; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Suivi de présence par radar mmWave</h1>
+  <p class="lead">Un nœud radar par pièce. Un hub suit chaque personne sur le plan de l'appartement.
+    La lumière s'allume quand la personne passe la porte. Elle reste allumée quand la personne ne bouge plus.</p>
+
+  <h2>1. Ce que voit le système</h2>
+  <div class="demo">
+    <figure>
+      <svg id="plan" viewBox="0 0 600 600" role="img"
+           aria-label="Plan d'un appartement de cinq pièces avec un nœud radar par pièce. Une personne se déplace ; la pièce qu'elle occupe s'éclaire.">
+        <defs>
+          <radialGradient id="glow" cx="50%" cy="50%" r="60%">
+            <stop offset="0%" stop-color="var(--light)" stop-opacity=".55"/>
+            <stop offset="100%" stop-color="var(--light)" stop-opacity=".12"/>
+          </radialGradient>
+        </defs>
+        <g id="rooms"></g>
+        <g id="fovs"></g>
+        <g id="doors"></g>
+        <g id="nodes"></g>
+        <g id="labels" font-size="13" fill="var(--muted)" text-anchor="middle"></g>
+        <polyline id="trail" fill="none" stroke="var(--accent)" stroke-width="2" stroke-opacity=".35" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle id="ring" r="16" fill="none" stroke="var(--held)" stroke-width="2" stroke-dasharray="4 4" opacity="0"/>
+        <circle id="person" r="8" fill="var(--accent)" stroke="var(--bg)" stroke-width="2"/>
+        <text id="pid" font-size="11" font-weight="700" fill="var(--fg)" text-anchor="middle">#7</text>
+        <text x="572" y="300" font-size="12" fill="var(--muted)" text-anchor="middle" transform="rotate(90 572 300)">extérieur</text>
+      </svg>
+      <figcaption>Animation de principe, temps accéléré (environ ×5). Carré bleu : nœud radar (ESP32 + LD2450 + LD2410C) avec son champ de ±60°.
+        Trait orange : porte. Cercle violet pointillé : personne immobile, gardée en mémoire.</figcaption>
+    </figure>
+    <div>
+      <div class="panel">
+        <h3>État de la piste</h3>
+        <div class="kv">
+          <span>Piste</span><b id="s-id">#7</b>
+          <span>État</span><span><span id="s-state" class="pill">—</span></span>
+          <span>Pièce</span><b id="s-room">—</b>
+          <span>LD2450</span><span id="s-2450">—</span>
+          <span>LD2410C</span><span id="s-2410">—</span>
+        </div>
+      </div>
+      <div class="panel" style="margin-top:12px">
+        <h3>Journal d'événements</h3>
+        <ul id="log"></ul>
+      </div>
+      <div class="controls">
+        <button id="btn-pause" type="button">Pause</button>
+        <button id="btn-restart" type="button">Recommencer</button>
+      </div>
+      <div class="legend">
+        <span style="--c: var(--accent)">confirmée (en mouvement)</span>
+        <span style="--c: var(--held)">immobile</span>
+        <span style="--c: var(--door)">à la porte</span>
+        <span style="--c: var(--light)">lumière allumée</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="rule"><b>Règle centrale : conservation des personnes.</b> Une personne n'apparaît pas et ne disparaît pas au milieu d'une pièce.
+    Perdue loin d'une porte, elle s'est arrêtée : on la garde. Perdue près d'une porte, elle est peut-être sortie : on attend 3 s qu'un nœud voisin la reprenne.</div>
+
+  <h2>2. La chaîne de traitement</h2>
+  <figure>
+    <svg viewBox="0 0 1000 400" role="img" aria-label="Chaîne de traitement : deux radars par pièce vers un ESP32, puis MQTT, puis le hub qui calcule les pistes et les pièces, puis Zigbee2MQTT et les lampes.">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <g fill="none" stroke="currentColor" stroke-width="1.5" style="color: var(--fg)">
+        <!-- nœud -->
+        <rect x="10" y="40" width="220" height="250" rx="10" stroke-dasharray="5 4" stroke="var(--line)"/>
+        <rect x="30" y="70" width="180" height="56" rx="8"/>
+        <rect x="30" y="140" width="180" height="56" rx="8"/>
+        <rect x="30" y="222" width="180" height="50" rx="8" stroke="var(--accent)" stroke-width="2"/>
+        <line x1="120" y1="126" x2="120" y2="140" stroke-dasharray="2 3"/>
+        <path d="M120 196 L120 220" marker-end="url(#arr)"/>
+        <!-- mqtt -->
+        <rect x="290" y="210" width="130" height="70" rx="35"/>
+        <path d="M210 247 L288 247" marker-end="url(#arr)"/>
+        <!-- hub -->
+        <rect x="480" y="20" width="270" height="360" rx="10" stroke="var(--accent)" stroke-width="2"/>
+        <path d="M420 232 C450 232 450 120 478 120" marker-end="url(#arr)"/>
+        <path d="M478 330 C450 330 450 262 422 262" marker-end="url(#arr)"/>
+        <!-- z2m & lamps -->
+        <rect x="800" y="210" width="180" height="56" rx="8"/>
+        <rect x="800" y="300" width="180" height="56" rx="8" stroke="var(--light)" stroke-width="2"/>
+        <path d="M890 266 L890 298" marker-end="url(#arr)"/>
+        <path d="M750 238 L798 238" marker-end="url(#arr)"/>
+      </g>
+      <g font-size="13" fill="currentColor" style="color: var(--fg)" text-anchor="middle">
+        <text x="120" y="32" fill="var(--muted)" font-size="12">nœud radar (×1 par pièce)</text>
+        <text x="120" y="94" font-weight="700">HLK-LD2450</text>
+        <text x="120" y="113" fill="var(--muted)" font-size="12">x, y de 3 personnes · 10 Hz</text>
+        <text x="120" y="164" font-weight="700">HLK-LD2410C</text>
+        <text x="120" y="183" fill="var(--muted)" font-size="12">respiration → présence</text>
+        <text x="120" y="244" font-weight="700">ESP32</text>
+        <text x="120" y="262" fill="var(--muted)" font-size="12">décode les UART → JSON</text>
+        <text x="128" y="212" fill="var(--muted)" font-size="10.5" text-anchor="start">UART 256 kbaud</text>
+        <text x="355" y="242" font-weight="700">Mosquitto</text>
+        <text x="355" y="260" fill="var(--muted)" font-size="12">broker MQTT</text>
+        <text x="250" y="238" fill="var(--muted)" font-size="11">Wi-Fi</text>
+        <text x="355" y="198" fill="var(--muted)" font-size="11">radar/&lt;id&gt;/frame</text>
+        <text x="455" y="348" fill="var(--muted)" font-size="11">…/set</text>
+        <text x="615" y="48" font-weight="700">Hub (Raspberry Pi)</text>
+      </g>
+      <g font-size="12.5" fill="currentColor" style="color: var(--fg)">
+        <text x="500" y="84"><tspan font-weight="700">1</tspan>  repère capteur → repère appartement</text>
+        <text x="500" y="116"><tspan font-weight="700">2</tspan>  rejet des cibles hors de la pièce</text>
+        <text x="500" y="148"><tspan font-weight="700">3</tspan>  prédiction (filtre de Kalman)</text>
+        <text x="500" y="180"><tspan font-weight="700">4</tspan>  association (Mahalanobis + hongrois)</text>
+        <text x="500" y="212"><tspan font-weight="700">5</tspan>  cycle de vie des pistes</text>
+        <text x="500" y="244"><tspan font-weight="700">6</tspan>  pièces : changement par une porte</text>
+        <text x="500" y="276"><tspan font-weight="700">7</tspan>  lumières : ON à l'entrée,</text>
+        <text x="514" y="294" fill="var(--muted)">OFF 5 s après la pièce vide</text>
+      </g>
+      <g font-size="13" fill="currentColor" style="color: var(--fg)" text-anchor="middle">
+        <text x="890" y="234" font-weight="700">Zigbee2MQTT</text>
+        <text x="890" y="252" fill="var(--muted)" font-size="12">clé Zigbee</text>
+        <text x="890" y="324" font-weight="700">Lampes</text>
+        <text x="890" y="342" fill="var(--muted)" font-size="12">1 par pièce</text>
+        <text x="774" y="228" fill="var(--muted)" font-size="11">MQTT</text>
+      </g>
+    </svg>
+    <figcaption>Les nœuds ne font que lire les radars et publier. Toute l'intelligence est sur le hub, le seul à connaître le plan de l'appartement.</figcaption>
+  </figure>
+
+  <h2>3. La vie d'une piste</h2>
+  <figure>
+    <svg viewBox="0 0 1000 330" role="img" aria-label="Machine à états d'une piste : provisoire, confirmée, immobile, à la porte, supprimée, avec les conditions de passage.">
+      <defs>
+        <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <g fill="none" stroke-width="2" style="color: var(--fg)">
+        <rect x="20" y="135" width="140" height="54" rx="27" stroke="var(--muted)"/>
+        <rect x="270" y="135" width="150" height="54" rx="27" stroke="var(--accent)"/>
+        <rect x="560" y="30" width="150" height="54" rx="27" stroke="var(--held)"/>
+        <rect x="560" y="240" width="150" height="54" rx="27" stroke="var(--door)"/>
+        <rect x="840" y="135" width="140" height="54" rx="27" stroke="var(--muted)" stroke-dasharray="5 4"/>
+      </g>
+      <g fill="none" stroke="currentColor" stroke-width="1.4" style="color: var(--fg)">
+        <path d="M160 162 L268 162" marker-end="url(#arr2)"/>
+        <path d="M420 150 C480 110 500 70 558 60" marker-end="url(#arr2)"/>
+        <path d="M560 72 C500 100 460 130 424 148" marker-end="url(#arr2)" stroke-dasharray="5 4"/>
+        <path d="M420 176 C480 214 500 254 558 264" marker-end="url(#arr2)"/>
+        <path d="M560 254 C500 228 460 200 424 178" marker-end="url(#arr2)" stroke-dasharray="5 4"/>
+        <path d="M710 57 C790 70 820 120 852 140" marker-end="url(#arr2)"/>
+        <path d="M710 267 C790 254 820 204 852 186" marker-end="url(#arr2)"/>
+      </g>
+      <g font-size="14" font-weight="700" text-anchor="middle" fill="currentColor" style="color: var(--fg)">
+        <text x="90" y="167">provisoire</text>
+        <text x="345" y="167">confirmée</text>
+        <text x="635" y="62">immobile</text>
+        <text x="635" y="272">à la porte</text>
+        <text x="910" y="167">supprimée</text>
+      </g>
+      <g font-size="11.5" fill="var(--muted)" text-anchor="middle">
+        <text x="214" y="150">4 détections</text>
+        <text x="214" y="182">en 1 s</text>
+        <text x="455" y="58">perdue loin</text>
+        <text x="455" y="73">d'une porte</text>
+        <text x="552" y="112" text-anchor="start">se remet à bouger</text>
+        <text x="455" y="270">perdue près</text>
+        <text x="455" y="285">d'une porte</text>
+        <text x="552" y="214" text-anchor="start">reprise par le</text>
+        <text x="552" y="228" text-anchor="start">nœud voisin (&lt; 3 s)</text>
+        <text x="830" y="60">LD2410C : personne</text>
+        <text x="830" y="75">pendant 45 s</text>
+        <text x="830" y="262">pas reprise en 3 s</text>
+        <text x="830" y="277">= sortie</text>
+      </g>
+    </svg>
+    <figcaption>Seules les pistes « confirmée » et « immobile » comptent comme présence. Un fantôme radar isolé ne passe jamais l'étape « provisoire ».</figcaption>
+  </figure>
+
+  <h2>4. Pourquoi deux radars</h2>
+  <p>Le <b>LD2450</b> donne la position de chaque personne, mais il perd souvent une personne parfaitement immobile.
+    Le <b>LD2410C</b> voit la respiration, donc une personne immobile, mais il ne donne ni position ni identité.
+    Le hub prend la position et l'identité du premier, et la confirmation de présence du second.</p>
+</main>
+
+<script>
+(function () {
+  const S = 60, OX = 40, OY = 40, H = 9;               // 60 px par mètre, y inversé
+  const X = (x) => OX + x * S, Y = (y) => OY + (H - y) * S;
+  const ns = "http://www.w3.org/2000/svg";
+  const el = (tag, attrs, parent) => { const e = document.createElementNS(ns, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+
+  const rooms = {
+    salon:   [0, 0, 5, 4],   cuisine: [5, 0, 8, 4],   couloir: [0, 4, 8, 5.2],
+    chambre: [0, 5.2, 4, 9], sdb:     [4, 5.2, 6.5, 8],
+  };
+  const doors = [[5, 1, 5, 2], [2, 4, 3, 4], [1, 5.2, 2, 5.2], [4.5, 5.2, 5.3, 5.2], [8, 4.2, 8, 5.0]];
+  const nodes = { salon: [0.1, 0.1, 45], cuisine: [7.9, 0.1, 135], couloir: [0.05, 4.6, 0],
+                  couloir2: [7.95, 4.6, 180], chambre: [0.1, 8.9, -45], sdb: [6.4, 7.9, -135] };
+
+  const gR = document.getElementById("rooms"), gF = document.getElementById("fovs"),
+        gD = document.getElementById("doors"), gN = document.getElementById("nodes"),
+        gL = document.getElementById("labels");
+  const roomRect = {}, glowRect = {};
+  for (const [n, [x1, y1, x2, y2]] of Object.entries(rooms)) {
+    roomRect[n] = el("rect", { x: X(x1), y: Y(y2), width: (x2 - x1) * S, height: (y2 - y1) * S,
+      fill: "var(--room)", stroke: "var(--fg)", "stroke-width": 2 }, gR);
+    glowRect[n] = el("rect", { x: X(x1) + 1, y: Y(y2) + 1, width: (x2 - x1) * S - 2, height: (y2 - y1) * S - 2,
+      fill: "url(#glow)", opacity: 0 }, gR);
+    glowRect[n].style.transition = "opacity .5s";
+    const t = el("text", { x: X((x1 + x2) / 2), y: Y((y1 + y2) / 2) + 4 }, gL); t.textContent = n;
+  }
+  for (const [x1, y1, x2, y2] of doors)
+    el("line", { x1: X(x1), y1: Y(y1), x2: X(x2), y2: Y(y2), stroke: "var(--door)", "stroke-width": 7 }, gD);
+  const nodeEls = {};
+  for (const [n, [x, y, th]] of Object.entries(nodes)) {
+    const r = 6 * S, a1 = (th - 60) * Math.PI / 180, a2 = (th + 60) * Math.PI / 180;
+    const p = `M${X(x)},${Y(y)} L${X(x + 6 * Math.cos(a1))},${Y(y + 6 * Math.sin(a1))} A${r},${r} 0 0 0 ${X(x + 6 * Math.cos(a2))},${Y(y + 6 * Math.sin(a2))} Z`;
+    const w = el("path", { d: p, fill: "var(--accent)", opacity: .035 }, gF);
+    const sq = el("rect", { x: X(x) - 6, y: Y(y) - 6, width: 12, height: 12, rx: 2, fill: "var(--accent)" }, gN);
+    nodeEls[n] = { wedge: w, sq };
+  }
+  // la zone de dessin est rognée à l'appartement + extérieur
+  const clip = el("clipPath", { id: "apt" }, document.querySelector("#plan defs"));
+  el("rect", { x: X(0), y: Y(9), width: 8 * S, height: 9 * S }, clip);
+  gF.setAttribute("clip-path", "url(#apt)");
+
+  // Scénario (secondes de démo). go = marche, stay = arrêt.
+  const script = [
+    ["at", 8.9, 4.6], ["go", [[7.5, 4.6], [2.5, 4.6], [2.5, 3.3], [1.5, 1.5]]], ["stay", 6],
+    ["go", [[3, 1.5], [5, 1.5], [6.5, 2]]], ["stay", 3.5],
+    ["go", [[5, 1.5], [2.5, 3.3], [2.5, 4.6], [1.5, 4.6], [1.5, 6.2], [1, 8]]], ["stay", 7],
+    ["go", [[1.5, 6.2], [1.5, 4.6], [7.5, 4.6], [8.9, 4.6]]], ["stay", 2],
+  ];
+  const SPEED = 2.2;                      // m/s de démo (temps accéléré)
+  const HOLD_AFTER = 1.2, OFF_DELAY = 1.2; // s de démo
+
+  const person = document.getElementById("person"), pid = document.getElementById("pid"),
+        ring = document.getElementById("ring"), trail = document.getElementById("trail");
+  const sState = document.getElementById("s-state"), sRoom = document.getElementById("s-room"),
+        s2450 = document.getElementById("s-2450"), s2410 = document.getElementById("s-2410"),
+        sId = document.getElementById("s-id"), log = document.getElementById("log");
+
+  let st, paused = false, last = null, trackId = 7;
+  function reset() {
+    st = { i: 0, pos: [8.9, 4.6], wp: [], until: -1, t: 0, still: 0, room: null, prevRoom: null,
+      lights: {}, emptySince: {}, pts: [], exited: false };
+    for (const r in rooms) { st.lights[r] = false; st.emptySince[r] = 0; glowRect[r].setAttribute("opacity", 0); }
+    log.innerHTML = ""; trackId = 7; sId.textContent = "#" + trackId; pid.textContent = "#" + trackId;
+  }
+  function roomOf([x, y]) {
+    for (const [n, [x1, y1, x2, y2]] of Object.entries(rooms)) if (x >= x1 && x <= x2 && y >= y1 && y <= y2) return n;
+    return null;
+  }
+  function nearDoor([x, y]) {
+    return doors.some(([x1, y1, x2, y2]) => {
+      const cx = Math.max(Math.min(x, Math.max(x1, x2)), Math.min(x1, x2));
+      const cy = Math.max(Math.min(y, Math.max(y1, y2)), Math.min(y1, y2));
+      return Math.hypot(x - cx, y - cy) < 0.7;
+    });
+  }
+  function addLog(txt) {
+    const li = document.createElement("li");
+    li.textContent = `[${st.t.toFixed(1).padStart(5)} s] ${txt}`;
+    log.prepend(li);
+    while (log.children.length > 6) log.lastChild.remove();
+  }
+  function setPill(text, color) { sState.textContent = text; sState.style.background = color; }
+
+  function step(dt) {
+    st.t += dt;
+    let moving = false;
+    if (st.wp.length) {
+      const [tx, ty] = st.wp[0], dx = tx - st.pos[0], dy = ty - st.pos[1], d = Math.hypot(dx, dy), s = SPEED * dt;
+      if (d <= s) { st.pos = [tx, ty]; st.wp.shift(); } else st.pos = [st.pos[0] + dx / d * s, st.pos[1] + dy / d * s];
+      moving = true;
+    } else if (st.t >= st.until) {
+      if (st.i >= script.length) { reset(); return; }
+      const c = script[st.i++];
+      if (c[0] === "at") st.pos = [c[1], c[2]];
+      else if (c[0] === "go") st.wp = c[1].map((p) => p.slice());
+      else if (c[0] === "stay") st.until = st.t + c[1];
+    }
+    st.still = moving ? 0 : st.still + dt;
+
+    const room = roomOf(st.pos);
+    const inside = room !== null;
+    if (room && room !== st.room) {
+      if (st.room === null) {
+        if (st.exited) { trackId += 1; sId.textContent = "#" + trackId; pid.textContent = "#" + trackId; st.exited = false; }
+        addLog(`piste #${trackId} naissance  -> ${room}`);
+      } else addLog(`piste #${trackId} entrée  ${st.room} -> ${room}`);
+      st.prevRoom = st.room; st.room = room;
+    }
+    if (!inside && st.room) { addLog(`piste #${trackId} sortie  ${st.room} -> extérieur`); st.room = null; st.exited = true; }
+
+    // lumières : ON dès l'entrée, OFF après un délai de pièce vide
+    for (const r in rooms) {
+      if (r === st.room) {
+        if (!st.lights[r]) { st.lights[r] = true; addLog(`lumière ${r} ON`); }
+        st.emptySince[r] = st.t;
+      } else if (st.lights[r] && st.t - st.emptySince[r] > OFF_DELAY) {
+        st.lights[r] = false; addLog(`lumière ${r} OFF`);
+      }
+      glowRect[r].setAttribute("opacity", st.lights[r] ? 1 : 0);
+    }
+
+    // affichage
+    const [px, py] = [X(st.pos[0]), Y(st.pos[1])];
+    person.setAttribute("cx", px); person.setAttribute("cy", py);
+    pid.setAttribute("x", px); pid.setAttribute("y", py - 13);
+    ring.setAttribute("cx", px); ring.setAttribute("cy", py);
+    st.pts.push(`${px.toFixed(1)},${py.toFixed(1)}`); if (st.pts.length > 160) st.pts.shift();
+    trail.setAttribute("points", st.pts.join(" "));
+
+    const held = inside && st.still > HOLD_AFTER;
+    const atDoor = inside && moving && nearDoor(st.pos);
+    person.setAttribute("fill", held ? "var(--held)" : atDoor ? "var(--door)" : "var(--accent)");
+    ring.setAttribute("opacity", held ? 1 : 0);
+    person.setAttribute("opacity", inside ? 1 : .35);
+    if (!inside) setPill("hors appartement", "var(--muted)");
+    else if (held) setPill("immobile", "var(--held)");
+    else if (atDoor) setPill("confirmée · près d'une porte", "var(--door)");
+    else setPill("confirmée", "var(--accent)");
+    sRoom.textContent = st.room || "—";
+    s2450.textContent = !inside ? "aucune cible" : held ? "cible perdue (personne figée)" : "cible suivie, 10 Hz";
+    s2410.textContent = inside ? "présence (respiration)" : "personne";
+    for (const [n, o] of Object.entries(nodeEls)) {
+      const r = n.replace(/2$/, "");
+      const active = inside && r === st.room;
+      o.wedge.setAttribute("opacity", active ? .11 : .035);
+    }
+  }
+
+  function frame(ts) {
+    if (last === null) last = ts;
+    const dt = Math.min(0.05, (ts - last) / 1000); last = ts;
+    if (!paused) step(dt);
+    requestAnimationFrame(frame);
+  }
+  document.getElementById("btn-pause").addEventListener("click", (e) => {
+    paused = !paused; e.target.textContent = paused ? "Reprendre" : "Pause";
+  });
+  document.getElementById("btn-restart").addEventListener("click", () => { reset(); });
+  reset();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

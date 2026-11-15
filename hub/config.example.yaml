@@ -1,0 +1,78 @@
+# Appartement d'exemple (T2 + couloir). Unités : mètres, degrés.
+# Origine : coin sud-ouest du salon. x vers l'est, y vers le nord.
+#
+#   y
+#   9 +-----------+
+#     |  chambre  |  sdb  |
+# 5.2 +--[ ]------+--[ ]--+------------+
+#     |            couloir            [ ] porte d'entrée (vers "exterieur")
+#   4 +----[ ]----------+-------------+
+#     |    salon        [ ]  cuisine  |
+#   0 +-----------------+-------------+
+#     0                 5             8    x
+
+mqtt:
+  host: 127.0.0.1
+  port: 1883
+  radar_topic: radar        # entrée : radar/<node_id>/frame (JSON publié par l'ESP32)
+  state_topic: presence     # sortie : presence/rooms/<pièce>, presence/tracks, presence/events
+
+zigbee:
+  base_topic: zigbee2mqtt   # commande : zigbee2mqtt/<lampe>/set {"state": "ON"}
+  off_delay_s: 5            # délai avant extinction quand une pièce devient vide
+
+tracker:
+  meas_sigma_m: 0.15        # écart-type de mesure supposé du LD2450 (à mesurer en TP)
+  accel_sigma: 3.0          # bruit de modèle (accélération blanche, m/s²)
+  gate_chi2: 13.8           # porte de Mahalanobis (99.9 %, 2 ddl)
+  confirm_hits: 4           # nombre de détections pour confirmer une piste…
+  confirm_window_s: 1.0     # …dans cette fenêtre de temps
+  tentative_timeout_s: 0.6  # piste provisoire abandonnée sans détection
+  miss_to_hold_s: 1.5       # piste confirmée sans détection -> décision « immobile » ou « sortie »
+  hold_gate_m: 1.2          # rayon de ré-association d'une personne immobile
+  door_margin_m: 0.7        # une piste perdue à moins de cette distance d'une porte est « à la porte »
+  handoff_s: 3.0            # délai pour retrouver une piste perdue à une porte
+  static_absent_s: 45       # LD2410C « personne » pendant ce temps -> on libère les pistes immobiles
+  hold_max_s: 14400         # garde-fou : durée max d'une piste immobile sans aucune confirmation
+
+sensor:
+  max_range_m: 6.0          # LD2450 : portée ~6 m
+  half_fov_deg: 60          # LD2450 : ±60° en azimut
+  static_valid_s: 2.0       # un rapport LD2410C est valable pendant ce temps
+
+rooms:
+  - name: salon
+    polygon: [[0, 0], [5, 0], [5, 4], [0, 4]]
+    lights: [lampe_salon]
+  - name: cuisine
+    polygon: [[5, 0], [8, 0], [8, 4], [5, 4]]
+    lights: [lampe_cuisine]
+  - name: couloir
+    polygon: [[0, 4], [8, 4], [8, 5.2], [0, 5.2]]
+    lights: [lampe_couloir]
+  - name: chambre
+    polygon: [[0, 5.2], [4, 5.2], [4, 9], [0, 9]]
+    lights: [lampe_chambre]
+  - name: sdb
+    polygon: [[4, 5.2], [6.5, 5.2], [6.5, 8], [4, 8]]
+    lights: [lampe_sdb]
+
+# Une porte est un segment [a, b] posé sur le mur commun à deux pièces.
+# "exterieur" est un nom réservé : franchir cette porte = quitter l'appartement.
+doors:
+  - {name: salon-cuisine,   a: [5, 1.0],   b: [5, 2.0],   rooms: [salon, cuisine]}
+  - {name: salon-couloir,   a: [2, 4],     b: [3, 4],     rooms: [salon, couloir]}
+  - {name: couloir-chambre, a: [1, 5.2],   b: [2, 5.2],   rooms: [couloir, chambre]}
+  - {name: couloir-sdb,     a: [4.5, 5.2], b: [5.3, 5.2], rooms: [couloir, sdb]}
+  - {name: entree,          a: [8, 4.2],   b: [8, 5.0],   rooms: [couloir, exterieur]}
+
+# Un nœud = un ESP32 + un LD2450 (+ un LD2410C). pose : position et direction de visée.
+# Règle de pose : les portes de la pièce doivent être dans le champ du LD2450.
+nodes:
+  - {id: n-salon,    room: salon,   pose: [0.1, 0.1, 45]}
+  - {id: n-cuisine,  room: cuisine, pose: [7.9, 0.1, 135]}
+  - {id: n-couloir-o, room: couloir, pose: [0.05, 4.6, 0]}
+  - {id: n-couloir-e, room: couloir, pose: [7.95, 4.6, 180]}
+  - {id: n-chambre,  room: chambre, pose: [0.1, 8.9, -45]}
+  - {id: n-sdb,      room: sdb,     pose: [6.4, 7.9, -135]}
+    # exclude: [[[x,y],...]]   # zones à ignorer (miroir, ventilateur, rideau devant une fenêtre)
