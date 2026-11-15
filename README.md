@@ -7,10 +7,15 @@ Pas de caméra, pas de badge. Un nœud radar par pièce (ESP32 + 2 radars 24 GHz
 un hub (Raspberry Pi ou PC) qui suit chaque personne sur le plan de
 l'appartement, et Zigbee2MQTT pour les lampes.
 
-![Simulation](docs/simulation.png)
+![Animation du fonctionnement](docs/demo.gif)
 
-Schéma animé du fonctionnement : [`docs/fonctionnement.html`](docs/fonctionnement.html)
-(à ouvrir dans un navigateur).
+*Animation de principe (temps accéléré) : la pièce s'éclaire quand la personne passe la porte ;
+la personne immobile reste détectée (cercle violet). Version interactive :
+[`docs/fonctionnement.html`](docs/fonctionnement.html).*
+
+Résultat du simulateur (vrai code de suivi, 3 personnes, 25 min) :
+
+![Simulation](docs/simulation.png)
 
 > L'ancienne version de ce dépôt (détection par Wi-Fi CSI) est conservée sur la
 > branche [`wifi-csi-archive`](../../tree/wifi-csi-archive).

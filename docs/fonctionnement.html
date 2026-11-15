@@ -392,6 +392,7 @@
   });
   document.getElementById("btn-restart").addEventListener("click", () => { reset(); });
   reset();
+  window.radarDemo = { step: (dt) => step(dt), reset, pause: () => { paused = true; } };
   requestAnimationFrame(frame);
 })();
 </script>
