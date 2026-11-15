@@ -133,6 +133,8 @@ class SensorModel:
     p_ghost: float = 0.02
     p_static_hit: float = 0.98
     p_static_fp: float = 0.003
+    # Pannes injectées : {"type": "araignee" | "coupure", "node": id, "t0": s, "t1": s}
+    faults: list = field(default_factory=list)
 
 
 class Simulator:
@@ -189,35 +191,56 @@ class Simulator:
                 merged.append(g)
         merged.sort(key=lambda d: np.hypot(d[0] - node.pose[0], d[1] - node.pose[1]))
         targets = []
+        spider = self._fault(node.id, "araignee", t)
+        if spider and self.rng.random() < 0.9:
+            # bestiole sur le boîtier : cible à ~20 cm devant le radar
+            merged.insert(0, None)
         for d in merged[:3]:
+            if d is None:
+                targets.append((int(self.rng.normal(0, 30)), int(200 + self.rng.normal(0, 30)), 0))
+                continue
             xs, ys = world_to_sensor(d[0], d[1], node.pose)
             targets.append((int(xs * 1000), int(ys * 1000), 0))
         # LD2410C : présence statique dans la pièce
         occupied = any(self.apt.room_of(tuple(pr.pos)) == node.room for pr in self.persons)
         p = self.m.p_static_hit if occupied else self.m.p_static_fp
         st = {"state": 2 if self.rng.random() < p else 0}
+        if spider:
+            st = {"state": 2, "sta": 20}
         return targets, st
 
+    def _fault(self, node_id: str, kind: str, t: float) -> bool:
+        return any(f["type"] == kind and f["node"] == node_id and f["t0"] <= t < f.get("t1", math.inf)
+                   for f in self.m.faults)
+
+    def tick(self, k: int) -> None:
+        """Avance la simulation d'un pas DT (le pas numéro k)."""
+        t = k * DT
+        for pr in self.persons:
+            pr.step(t, DT)
+        for i, node in enumerate(self._nodes):
+            tn = t + 0.1 * DT * i / max(1, len(self._nodes))  # trames décalées entre nœuds
+            if self._fault(node.id, "coupure", tn):
+                continue
+            tg, st = self._frame(node, tn)
+            self.engine.ingest_frame(node.id, tn, tg, st)
+        self.engine.step(t + DT * 0.99)
+        truth = {r: 0 for r in self.apt.rooms}
+        for pr in self.persons:
+            r = self.apt.room_of(tuple(pr.pos))
+            if r:
+                truth[r] += 1
+        snap = self.engine.snapshot()
+        self.history.append((t, truth, snap["occupancy"], snap["lights"],
+                             [tuple(pr.pos) for pr in self.persons], snap["tracks"]))
+
+    @property
+    def _nodes(self):
+        return list(self.apt.nodes.values())
+
     def run(self, verbose: bool = False) -> dict:
-        nodes = list(self.apt.nodes.values())
-        n_steps = int(self.sc["duration"] / DT)
-        for k in range(n_steps):
-            t = k * DT
-            for pr in self.persons:
-                pr.step(t, DT)
-            for i, node in enumerate(nodes):
-                tn = t + 0.1 * DT * i / max(1, len(nodes))  # trames décalées entre nœuds
-                tg, st = self._frame(node, tn)
-                self.engine.ingest_frame(node.id, tn, tg, st)
-            self.engine.step(t + DT * 0.99)
-            truth = {r: 0 for r in self.apt.rooms}
-            for pr in self.persons:
-                r = self.apt.room_of(tuple(pr.pos))
-                if r:
-                    truth[r] += 1
-            snap = self.engine.snapshot()
-            self.history.append((t, truth, snap["occupancy"], snap["lights"],
-                                 [tuple(pr.pos) for pr in self.persons], snap["tracks"]))
+        for k in range(int(self.sc["duration"] / DT)):
+            self.tick(k)
         if verbose:
             for e in self.engine.event_log:
                 print(e)
@@ -268,7 +291,8 @@ class Simulator:
             "noir_avec_occupant_s": {r: round(v, 1) for r, v in dark.items()},
             "allumé_pièce_vide_s": {r: round(v, 1) for r, v in wasted.items()},
             "changements_identité": switches,
-            "détections_rejetées_hors_pièce": self.engine.rejected,
+            "détections_rejetées": self.engine.rejected,
+            "alertes": [a["title"] for a in self.engine.alerts.snapshot()["history"]],
         }
 
     def plot(self, path: str) -> None:

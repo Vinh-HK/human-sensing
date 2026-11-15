@@ -17,7 +17,9 @@ import logging
 import threading
 import time
 
+from .alerts import mqtt_sink, ntfy_sink
 from .engine import Engine
+from .web import Dashboard
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +64,15 @@ def run(apt, dry_run: bool = False, rate_hz: float = 10.0) -> None:
     eng = Engine(apt, lights)
     lock = threading.Lock()
     t0 = time.monotonic()
+
+    # Alertes : MQTT toujours, téléphone (ntfy) si configuré
+    eng.alerts.sinks.append(mqtt_sink(client, f"{state_topic}/alerts"))
+    ntfy = apt.raw.get("alerts", {}).get("ntfy_url")
+    if ntfy:
+        eng.alerts.sinks.append(ntfy_sink(ntfy))
+    port = apt.raw.get("web", {}).get("port")
+    if port:
+        Dashboard(apt, eng, lock, lambda: time.monotonic() - t0, int(port)).start()
 
     def on_connect(c, *_):
         c.subscribe(f"{radar_topic}/+/frame", qos=0)

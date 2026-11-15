@@ -26,7 +26,8 @@ Résultat du simulateur (vrai code de suivi, 3 personnes, 25 min) :
 
 | Partie | État |
 |---|---|
-| Logique de suivi, pièces, lumières (Python) | Validée **en simulation** (12 tests, 16 graines aléatoires) |
+| Logique de suivi, pièces, lumières (Python) | Validée **en simulation** (16 tests, 16 graines aléatoires) |
+| Alertes et tableau de bord web | Validés **en simulation** (pannes injectées : araignée, nœud coupé) |
 | Firmware ESP32 | **Compile** (PlatformIO, ESP32 DevKit). Non testé sur radars réels |
 | Décodeurs LD2450 / LD2410C | Testés contre l'exemple du manuel Hi-Link (Python et C++) |
 | Essai dans un vrai appartement | **Pas encore fait** |
@@ -40,10 +41,11 @@ Résultats simulés (scénario par défaut : 3 personnes, 25 min, 5 pièces, 16 
 
 | Indicateur | Valeur |
 |---|---|
-| Temps où le nombre de personnes par pièce est exact | 99,86 % à 99,94 % |
-| Personne présente, lumière éteinte (> 1 s après l'entrée) | 0 s sur 15 graines, 1,4 s sur 1 graine |
-| Lumière allumée, pièce vide (> délai + 3 s) | 0 à 8,3 s par scénario |
-| Changements d'identité | 0 sur 15 graines, 1 sur 1 graine |
+| Temps où le nombre de personnes par pièce est exact | 99,85 % à 99,92 % |
+| Personne présente, lumière éteinte (> 1 s après l'entrée) | 0 s sur les 16 graines |
+| Lumière allumée, pièce vide (> délai + 3 s) | 0 à 5,7 s par scénario |
+| Changements d'identité | 0 sur les 16 graines |
+| Fausses alertes | 0 sur les 16 graines |
 
 ---
 
@@ -144,7 +146,9 @@ câbler (confiance ~85 %).**
   porte est l'événement le plus important du système.
 - Éviter un ventilateur, un rideau devant une fenêtre ouverte, un aquarium dans
   le champ. Sinon, déclarer une zone `exclude` dans la configuration.
-- Couloir de plus de 6 m : deux nœuds, un à chaque bout (le hub fusionne).
+- Couloir de plus de 6 m : deux nœuds (le hub fusionne).
+- **Pas de nœud à moins de 50 cm d'une porte.** Les cibles à moins de 50 cm
+  d'un capteur sont ignorées (insectes, araignées) : la porte serait aveugle.
 - LD2450 et LD2410C côte à côte : **risque d'interférence entre deux radars
   24 GHz non vérifié**. Tester avec 10–20 cm d'écart et des orientations
   légèrement différentes. Si gêne : n'utiliser que la sortie OUT du LD2410C, ou
@@ -160,8 +164,9 @@ câbler (confiance ~85 %).**
 cd hub
 pip install -r requirements.txt
 cp config.example.yaml config.yaml      # décrire VOTRE appartement
-python -m pytest -q                     # 12 tests
+python -m pytest -q                     # 16 tests
 python -m presence sim --plot sim.png   # scénario simulé + figure
+python -m presence demo                 # démo temps réel : http://localhost:8080
 ```
 
 Prérequis réseau : un broker MQTT (Mosquitto) et Zigbee2MQTT déjà en place.
@@ -176,6 +181,42 @@ Le hub publie :
 - `presence/rooms/<pièce>` → `{"occupancy": 2, "light": true}` (retenu)
 - `presence/tracks` → positions et états des pistes, 1 Hz
 - `presence/events` → entrées, sorties, naissances, fins de pistes
+- `presence/alerts` → alertes de santé (levée et résolution)
+
+### Tableau de bord et alertes
+
+Le hub sert une page web sur le réseau local : `http://<ip-du-hub>:8080`
+(sans mot de passe : ne pas l'exposer sur Internet).
+Elle montre le plan en direct, les personnes, les lumières, l'état des nœuds
+et les alertes. Sans matériel, `python -m presence demo` lance une simulation
+en temps réel avec deux pannes injectées.
+
+![Tableau de bord](docs/dashboard.png)
+
+| Alerte | Condition | Cause probable |
+|---|---|---|
+| Objet collé au capteur | > 40 cibles à moins de 50 cm du LD2450 en 30 s | insecte posé, araignée, toile, objet contre le boîtier |
+| Présence collée au capteur | LD2410C : présence immobile à moins de 50 cm pendant 2 min | mêmes causes ; une piste immobile risque d'être gardée à tort |
+| Nœud muet | aucune trame depuis 15 s | alimentation, Wi-Fi, câble du radar |
+| Présence sans personne suivie | LD2410C voit quelqu'un 10 min, aucune piste | animal, ventilateur, rideau, entrée non vue |
+
+Les cibles à moins de 50 cm sont **ignorées** par le suivi : une mouche sur le
+boîtier n'allume pas la lumière. Les seuils sont réglables (section `alerts`
+de la configuration).
+
+**Notifications sur téléphone** (optionnel) : installer l'application gratuite
+[ntfy](https://ntfy.sh) (Android, iOS), s'abonner à un sujet long et difficile à
+deviner, puis dans `config.yaml` :
+
+```yaml
+alerts:
+  ntfy_url: https://ntfy.sh/mon-sujet-long-et-secret
+```
+
+Le sujet ntfy.sh public est lisible par quiconque connaît son nom : pas
+d'information sensible dans les messages (ils ne contiennent que le nom du
+nœud et de la pièce). Pour plus de confidentialité, héberger son propre
+serveur ntfy.
 
 ### Nœuds
 
@@ -237,8 +278,10 @@ radar-presence/
 │   │   ├── protocol.py           décodeurs Python (TP sans ESP32)
 │   │   ├── tracker.py            Kalman + association + cycle de vie
 │   │   ├── engine.py             nœuds -> suivi -> pièces -> lumières
+│   │   ├── alerts.py             alertes de santé, MQTT, notifications ntfy
 │   │   ├── mqtt_io.py            MQTT et Zigbee2MQTT
-│   │   └── sim.py                simulateur + métriques + figure
+│   │   ├── web.py                tableau de bord web
+│   │   └── sim.py                simulateur + pannes + métriques + figure
 │   └── tests/
 └── docs/
     ├── TP_M2.md              projet pédagogique (Master 2 électronique)

@@ -72,7 +72,21 @@ nodes:
   - {id: n-salon,    room: salon,   pose: [0.1, 0.1, 45]}
   - {id: n-cuisine,  room: cuisine, pose: [7.9, 0.1, 135]}
   - {id: n-couloir-o, room: couloir, pose: [0.05, 4.6, 0]}
-  - {id: n-couloir-e, room: couloir, pose: [7.95, 4.6, 180]}
+  - {id: n-couloir-e, room: couloir, pose: [5.6, 5.15, -15]}   # pas collé à la porte d'entrée : zone aveugle < 0,5 m
   - {id: n-chambre,  room: chambre, pose: [0.1, 8.9, -45]}
   - {id: n-sdb,      room: sdb,     pose: [6.4, 7.9, -135]}
     # exclude: [[[x,y],...]]   # zones à ignorer (miroir, ventilateur, rideau devant une fenêtre)
+
+# Alertes de santé (valeurs par défaut ci-dessous). Voir presence/alerts.py.
+alerts:
+  min_range_m: 0.5          # cibles plus proches du LD2450 : ignorées (insecte, araignée, objet)
+  near_hits: 40             # … si plus de 40 en 30 s : alerte « objet collé au capteur »
+  static_near_cm: 50        # LD2410C : présence immobile plus proche que ça…
+  static_near_s: 120        # … pendant 2 min : alerte
+  node_silent_s: 15         # nœud sans trame : alerte « nœud muet »
+  phantom_static_s: 600     # LD2410C voit quelqu'un 10 min sans personne suivie : info
+  # ntfy_url: https://ntfy.sh/un-sujet-long-et-secret   # notifications téléphone (optionnel)
+
+# Tableau de bord web du hub : http://<ip-du-hub>:8080
+web:
+  port: 8080

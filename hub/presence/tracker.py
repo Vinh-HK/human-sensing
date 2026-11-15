@@ -378,7 +378,7 @@ class Tracker:
                     if held is not None:
                         # c'est la personne immobile qui se remet à bouger
                         held.x, held.P, held.last_hit = tr.x.copy(), tr.P.copy(), tr.last_hit
-                        held.trail = []
+                        held.trail = list(tr.trail)
                         self._set_state(held, CONFIRMED, t)
                         tr.state = DELETED
                     elif self._near_any_door(tr) or t < p["warmup_s"] \
@@ -445,6 +445,7 @@ class Tracker:
                     new.state = DELETED
                     continue
                 old.x, old.P, old.last_hit = new.x.copy(), new.P.copy(), max(old.last_hit, new.last_hit)
+                old.trail = sorted(old.trail + new.trail)[-30:]  # garder l'historique des deux
                 old.state, old.since = new.state, t
                 new.state = DELETED  # fusion silencieuse (pas d'événement « fin »)
 

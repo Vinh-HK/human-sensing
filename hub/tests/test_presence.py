@@ -127,3 +127,61 @@ def test_default_scenario_quality(seed):
     assert m["comptage_exact_%"] > 98.0
     assert sum(m["noir_avec_occupant_s"].values()) < 5.0
     assert sum(m["allumé_pièce_vide_s"].values()) < 60.0
+
+
+# ------------------------------------------------------------------ alertes
+
+def test_target_glued_to_sensor_is_ignored_and_alerted():
+    """Insecte ou araignée sur le boîtier : cible ignorée, alerte levée puis close."""
+    from presence.sim import SensorModel
+    apt = config.load(CFG)
+    sc = _scenario([dict(name="A", t0=0, start=(2.0, 7.0), script=[("stay", 400)])], 400)
+    m = SensorModel(faults=[{"type": "araignee", "node": "n-sdb", "t0": 20, "t1": 250}])
+    sim = Simulator(apt, sc, seed=5, model=m)
+    r = sim.run()
+    hist = {a.key: a for a in sim.engine.alerts.history}
+    assert "proche:n-sdb" in hist and not hist["proche:n-sdb"].active
+    assert "statique:n-sdb" in hist
+    # la salle de bain est vide : l'araignée ne doit jamais l'allumer
+    assert r["allumé_pièce_vide_s"]["sdb"] == 0.0
+
+
+def test_silent_node_alert():
+    from presence.sim import SensorModel
+    apt = config.load(CFG)
+    sc = _scenario([dict(name="A", t0=0, start=(2.0, 2.0), script=[("stay", 120, "fidget")])], 120)
+    m = SensorModel(faults=[{"type": "coupure", "node": "n-cuisine", "t0": 10, "t1": 60}])
+    sim = Simulator(apt, sc, seed=1, model=m)
+    sim.run()
+    a = {x.key: x for x in sim.engine.alerts.history}["muet:n-cuisine"]
+    assert a.level == "erreur" and 24 < a.since < 27 and not a.active
+
+
+def test_no_false_alert_in_normal_run():
+    apt = config.load(CFG)
+    r = Simulator(apt, seed=2).run()
+    assert r["alertes"] == []
+
+
+def test_dashboard_api():
+    import json
+    import threading
+    import urllib.request
+    from presence.engine import Engine
+    from presence.web import Dashboard
+    apt = config.load(CFG)
+    eng = Engine(apt)
+    eng.ingest_frame("n-salon", 0.0, [(0, 2000, 0)], {"state": 1})
+    eng.step(0.1)
+    d = Dashboard(apt, eng, threading.Lock(), lambda: 0.2, port=0, host="127.0.0.1")
+    d.start()
+    port = d.httpd.server_address[1]
+    try:
+        plan = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/plan"))
+        state = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state"))
+        page = urllib.request.urlopen(f"http://127.0.0.1:{port}/").read().decode()
+    finally:
+        d.stop()
+    assert len(plan["rooms"]) == 5 and len(plan["nodes"]) == 6
+    assert set(state) >= {"occupancy", "lights", "tracks", "nodes", "alerts"}
+    assert "tableau de bord" in page
